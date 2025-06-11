@@ -21,10 +21,11 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
 
     using SafeERC20 for IERC20;
     using ECDSA for bytes32;
-    bytes32 public constant MESSAGE_TYPEHASH =
-        keccak256(
-            "Message(bytes user,uint256 amount,uint8 tokenType,address tokenAddr,uint256 nonce)"
-        );
+
+    bytes32 public constant PAYLOAD_TYPEHASH = keccak256(
+        "Payload(bytes32 txKey,address from,address to,address tokenAddr,uint256 amount,uint8 tokenType,uint256 nonce)"
+    );
+
     bytes32 public constant LOCK_ERC20_TYPEHASH =
         keccak256(
             "LockERC20(address token,address sender,uint256 amount,uint256 nonce,uint256 toChainId,bytes toAddress)"
@@ -38,7 +39,7 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     mapping(bytes32 => address) public tokenMapping;
     mapping(bytes32 => mapping(address => bool)) public signatures;
     mapping(bytes32 => uint256) public signatureCount;
-    mapping(bytes32 => MessageData) public messageData;
+    mapping(bytes32 => Payload) public payloadData;
     mapping(bytes32 => bool) public processedMessages;
     mapping(address => uint256) public lockedTokenVL;
     mapping(address => uint256) public nonces;
@@ -58,18 +59,18 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     );
     event RescueTokenCCIP(address token, uint256 amount);
     event RescueTokenVL(uint256 amount);
-    event UnlockedTokenVL(bytes indexed user, uint256 amount);
-    event UnlockedTokenCCIP(
-        bytes indexed user,
+    event UnlockedTokenVL(address indexed recipientAddr, uint256 amount);
+    event UnlockedTokenERC20VL(
+        address indexed recipientAddr,
         address tokenAddr,
         uint256 amount
     );
 
     event SignatureSubmitted(
-        bytes32 indexed messageHash,
+        bytes32 indexed txKey,
         address indexed signer
     );
-    event Executed(bytes32 indexed messageHash);
+    event Executed(bytes32 indexed txKey);
     event ValidatorAdded(address indexed validator);
     event ValidatorRemoved(address indexed validator);
     event ThresholdUpdated(uint256 newThreshold);
@@ -112,14 +113,22 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         address desWalletAddress
     );
 
-    struct MessageData {
-        bytes user;
-        uint256 amount;
-        uint8 tokenType;
-        address tokenAddr;
-        uint256 nonce;
+    // struct MessageData {
+    //     bytes user;
+    //     uint256 amount;
+    //     uint8 tokenType;
+    //     address tokenAddr;
+    //     uint256 nonce;
+    // }
+    struct Payload {
+        bytes32 txKey; // key transaction
+        address from; // ví nguồn
+        address to;   // ví nhận
+        address tokenAddr; // token address
+        uint256 amount;    // số lượng token
+        uint8 tokenType; // loaị token
+        uint256 nonce;     // nonce → dùng để chống replay attack
     }
-
     constructor(
         address _ccipRouter,
         address[] memory _validators,
@@ -206,157 +215,162 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     }
 
     function hashMessage(
-        MessageData memory data
+        Payload memory data
     ) internal view returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked(
-                    "\x19\x01",
-                    domainSeparator,
-                    keccak256(
-                        abi.encode(
-                            MESSAGE_TYPEHASH,
-                            keccak256(data.user),
-                            data.amount,
-                            data.tokenType,
-                            data.tokenAddr,
-                            data.nonce
-                        )
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                domainSeparator,
+                keccak256(
+                    abi.encode(
+                        PAYLOAD_TYPEHASH,
+                        data.txKey,
+                        data.from,
+                        data.to,
+                        data.tokenAddr,
+                        data.amount,
+                        data.tokenType,
+                        data.nonce
                     )
                 )
-            );
+            )
+        );
+
     }
 
-    function bytesToAddress(
-        bytes memory b
-    ) internal pure returns (address addr) {
-        require(b.length >= 20, "Invalid user bytes");
-        assembly {
-            // Lấy 32 bytes từ b + 32 (bỏ qua phần length)
-            // rồi shift phải 12 bytes (96 bits) để lấy đúng 20 bytes địa chỉ
-            addr := div(mload(add(b, 32)), 0x1000000000000000000000000)
-        }
-    }
+    // function bytesToAddress(
+    //     bytes memory b
+    // ) internal pure returns (address addr) {
+    //     require(b.length >= 20, "Invalid user bytes");
+    //     assembly {
+    //         // Lấy 32 bytes từ b + 32 (bỏ qua phần length)
+    //         // rồi shift phải 12 bytes (96 bits) để lấy đúng 20 bytes địa chỉ
+    //         addr := div(mload(add(b, 32)), 0x1000000000000000000000000)
+    //     }
+    // }
 
-    function submitSignature(
-        bytes32 messageHash,
+    function unLockTokenVL(
         bytes memory signature,
-        bytes memory user,
-        uint256 amount,
-        uint8 tokenType,
-        address tokenAddr,
-        uint256 nonce
+        // address validatorAddr,
+        Payload calldata payload
+        // uint256 amount,
+        // uint8 tokenType,
+        // address tokenAddr,
+        // uint256 nonce
     ) public {
         require(_isValidator(msg.sender), "Not validator");
-        require(!signatures[messageHash][msg.sender], "Already signed");
+        require(!signatures[payload.txKey][msg.sender], "Already signed");
 
         // Kiểm tra nonce không bị reuse theo user
-        address userAddr = bytesToAddress(user);
-        require(nonce == nonces[userAddr] + 1, "Invalid nonce");
+        // address userAddr = bytesToAddress(user);
+        require(payload.nonce == nonces[payload.to] + 1, "Invalid nonce");
 
-        // Tạo message hash từ dữ liệu nhập, kiểm tra trùng với messageHash
-        MessageData memory data = MessageData(
-            user,
-            amount,
-            tokenType,
-            tokenAddr,
-            nonce
-        );
-        bytes32 calcHash = hashMessage(data);
-        require(calcHash == messageHash, "Invalid message hash");
+        // // Tạo message hash từ dữ liệu nhập, kiểm tra trùng với messageHash
+        // MessageData memory data = MessageData(
+        //     user,
+        //     amount,
+        //     tokenType,
+        //     tokenAddr,
+        //     nonce
+        // );
+        bytes32 calcHash = hashMessage(payload);
+        require(calcHash == payload.txKey, "Invalid message hash");
 
         // Xác thực chữ ký theo chuẩn eth-signed-message
         require(
-            _verifySignature(messageHash, signature, msg.sender),
+            _verifySignature(payload.txKey, signature, msg.sender),
             "Invalid signature"
         );
 
-        if (signatureCount[messageHash] == 0) {
+        if (signatureCount[payload.txKey] == 0) {
             // Chữ ký đầu tiên, lưu dữ liệu message
-            require(user.length >= 20, "Invalid user address length");
-            require(amount > 0, "Amount must be > 0");
+            require(payload.to != address(0), "Invalid recipient address");
+            // require(payload.to.length >= 20, "Invalid user address length"); // Địa chỉ người nhận phải là address 20 bytes ấy gu
+            require(payload.amount > 0, "Amount must be > 0");
 
-            if (tokenType == 1) {
-                require(tokenAddr != address(0), "Invalid token address");
-            } else if (tokenType != 0) {
-                revert("Unsupported token type");
-            }
+            // if (tokenType == 1) {
+            //     require(tokenAddr != address(0), "Invalid token address");
+            // } else if (tokenType != 0) {
+            //     revert("Unsupported token type");
+            // }
 
-            messageData[messageHash] = data;
+            payloadData[payload.txKey] = payload;
         } else {
             // Đã có chữ ký trước đó → kiểm tra dữ liệu khớp
-            MessageData memory stored = messageData[messageHash];
+            Payload memory stored = payloadData[payload.txKey];
             require(
-                stored.amount == amount &&
-                    stored.tokenType == tokenType &&
-                    stored.tokenAddr == tokenAddr &&
-                    stored.nonce == nonce &&
-                    keccak256(stored.user) == keccak256(user),
+                stored.txKey == payload.txKey &&
+                stored.from == payload.from &&
+                stored.to == payload.to &&
+                stored.tokenAddr == payload.tokenAddr &&
+                stored.amount == payload.amount &&
+                stored.nonce == payload.nonce,
                 "Data mismatch"
             );
+
         }
 
         // Đánh dấu validator đã ký, tăng số chữ ký
-        signatures[messageHash][msg.sender] = true;
-        signatureCount[messageHash] += 1;
+        signatures[payload.txKey][msg.sender] = true;
+        signatureCount[payload.txKey] += 1;
 
-        emit SignatureSubmitted(messageHash, msg.sender);
+        emit SignatureSubmitted(payload.txKey, msg.sender);
 
         // Nếu đủ threshold → thực thi hành động
-        if (signatureCount[messageHash] >= threshold) {
+        if (signatureCount[payload.txKey] >= threshold) {
             // Cập nhật nonce cho user
-            nonces[userAddr] = nonce;
-            _execute(messageHash);
+            nonces[payload.to] = payload.nonce;
+            _execute(payload.txKey);
         }
     }
 
-    function _execute(bytes32 messageHash) internal {
-        require(!processedMessages[messageHash], "Message already processed");
-        MessageData memory data = messageData[messageHash];
+    function _execute(bytes32 txKey) internal {
+        require(!processedMessages[txKey], "Message already processed");
+        Payload memory data = payloadData[txKey];
         require(data.amount > 0, "Invalid amount");
-        require(data.user.length >= 20, "Invalid user address length");
-        address userAddress = address(uint160(bytes20(data.user)));
-        require(userAddress != address(0), "Invalid user address");
+        require(data.to != address(0), "Invalid recipient address");
 
-        processedMessages[messageHash] = true;
+        address recipientAddr = data.to;
+    
+        processedMessages[txKey] = true;
 
         if (data.tokenType == 0) {
             require(
                 address(this).balance >= data.amount,
                 "Insufficient native token balance"
             );
-            (bool sent, ) = payable(userAddress).call{value: data.amount}("");
+            (bool sent, ) = payable(recipientAddr).call{value: data.amount}("");
             require(sent, "Failed to send native token");
-            emit UnlockedTokenVL(data.user, data.amount);
+            emit UnlockedTokenVL(recipientAddr, data.amount);
         } else if (data.tokenType == 1) {
             require(data.tokenAddr != address(0), "Invalid token address");
             require(
                 IERC20(data.tokenAddr).balanceOf(address(this)) >= data.amount,
                 "Insufficient ERC20 balance"
             );
-            IERC20(data.tokenAddr).safeTransfer(userAddress, data.amount);
-            emit UnlockedTokenCCIP(data.user, data.tokenAddr, data.amount);
+            IERC20(data.tokenAddr).safeTransfer(recipientAddr, data.amount);
+            emit UnlockedTokenERC20VL(recipientAddr, data.tokenAddr, data.amount);
         } else {
             revert("Unsupported token type");
         }
 
         // Dọn dẹp dữ liệu để tránh tái xử lý
-        delete messageData[messageHash];
-        delete signatureCount[messageHash];
+        delete payloadData[txKey];
+        delete signatureCount[txKey];
         for (uint256 i = 0; i < validators.length; i++) {
-            delete signatures[messageHash][validators[i]];
+            delete signatures[txKey][validators[i]];
         }
 
-        emit Executed(messageHash);
+        emit Executed(txKey);
     }
 
     function _verifySignature(
-        bytes32 messageHash,
+        bytes32 txKey,
         bytes memory signature,
         address signer
     ) internal pure returns (bool) {
         // bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(messageHash);
-        return ECDSA.recover(messageHash, signature) == signer;
+        return ECDSA.recover(txKey, signature) == signer;
     }
 
     function _splitSignature(
