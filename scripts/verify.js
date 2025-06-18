@@ -3,7 +3,7 @@ const { run } = require("hardhat");
 
 async function main() {
 
-  const address = "0x3A4EC19d3B815680255797E1749a72aB32f12ed2";
+  const address = "0x44E44963dd3933D70453F457D772A81Eb2F55fcf";
 
   const ccipRouterAddress = "0x0BF3dE8c5D3e8A2B34D2BEeB17ABfCeBaf363A59";
   const link = "0x779877A7B0D9E8603169DdbD7836e478b4624789"

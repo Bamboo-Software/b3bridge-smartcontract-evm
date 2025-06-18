@@ -22,14 +22,15 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using ECDSA for bytes32;
 
-    bytes32 public constant PAYLOAD_TYPEHASH = keccak256(
-        "Payload(bytes32 txKey,address from,address to,address tokenAddr,uint256 amount,uint8 tokenType,uint256 nonce)"
-    );
-
-    bytes32 public constant LOCK_ERC20_TYPEHASH =
+    bytes32 public constant PAYLOAD_TYPEHASH =
         keccak256(
-            "LockERC20(address token,address sender,uint256 amount,uint256 nonce,uint256 toChainId,bytes toAddress)"
+            "Payload(bytes32 txKey,address from,address to,address tokenAddr,uint256 amount,uint8 tokenType)"
         );
+
+    // bytes32 public constant LOCK_ERC20_TYPEHASH =
+    //     keccak256(
+    //         "LockERC20(address token,address sender,uint256 amount,uint256 nonce,uint256 toChainId,bytes toAddress)"
+    //     );
     bytes32 public domainSeparator;
     address public immutable i_link;
 
@@ -42,13 +43,13 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     mapping(bytes32 => Payload) public payloadData;
     mapping(bytes32 => bool) public processedMessages;
     mapping(address => uint256) public lockedTokenVL;
-    mapping(address => uint256) public nonces;
+    // mapping(address => uint256) public nonces;
     event LockedTokenVL(
         address indexed sender,
         uint256 amount,
         address destAddress,
         address destWalletAddress,
-        string tokenSymbol
+        address tokenAddr
     );
     event MessageReceived(
         address indexed user,
@@ -66,10 +67,7 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         uint256 amount
     );
 
-    event SignatureSubmitted(
-        bytes32 indexed txKey,
-        address indexed signer
-    );
+    event SignatureSubmitted(bytes32 indexed txKey, address indexed signer);
     event Executed(bytes32 indexed txKey);
     event ValidatorAdded(address indexed validator);
     event ValidatorRemoved(address indexed validator);
@@ -123,12 +121,13 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     struct Payload {
         bytes32 txKey; // key transaction
         address from; // ví nguồn
-        address to;   // ví nhận
+        address to; // ví nhận
         address tokenAddr; // token address
-        uint256 amount;    // số lượng token
+        uint256 amount; // số lượng token
         uint8 tokenType; // loaị token
-        uint256 nonce;     // nonce → dùng để chống replay attack
+        // uint256 nonce; // nonce → dùng để chống replay attack
     }
+
     constructor(
         address _ccipRouter,
         address[] memory _validators,
@@ -173,6 +172,7 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         threshold = newThreshold;
         emit ThresholdUpdated(newThreshold);
     }
+
     function _updateThreshold() internal {
         if (validators.length == 0) {
             threshold = 0;
@@ -214,28 +214,26 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         return validators.length;
     }
 
-    function hashMessage(
-        Payload memory data
-    ) internal view returns (bytes32) {
-        return keccak256(
-            abi.encodePacked(
-                "\x19\x01",
-                domainSeparator,
-                keccak256(
-                    abi.encode(
-                        PAYLOAD_TYPEHASH,
-                        data.txKey,
-                        data.from,
-                        data.to,
-                        data.tokenAddr,
-                        data.amount,
-                        data.tokenType,
-                        data.nonce
+    function hashMessage(Payload memory data) internal view returns (bytes32) {
+        return
+            keccak256(
+                abi.encodePacked(
+                    "\x19\x01",
+                    domainSeparator,
+                    keccak256(
+                        abi.encode(
+                            PAYLOAD_TYPEHASH,
+                            data.txKey,
+                            data.from,
+                            data.to,
+                            data.tokenAddr,
+                            data.amount,
+                            data.tokenType
+                            // data.nonce
+                        )
                     )
                 )
-            )
-        );
-
+            );
     }
 
     // function bytesToAddress(
@@ -251,19 +249,14 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
 
     function unLockTokenVL(
         bytes memory signature,
-        // address validatorAddr,
         Payload calldata payload
-        // uint256 amount,
-        // uint8 tokenType,
-        // address tokenAddr,
-        // uint256 nonce
     ) public {
         require(_isValidator(msg.sender), "Not validator");
         require(!signatures[payload.txKey][msg.sender], "Already signed");
 
         // Kiểm tra nonce không bị reuse theo user
         // address userAddr = bytesToAddress(user);
-        require(payload.nonce == nonces[payload.to] + 1, "Invalid nonce");
+        // require(payload.nonce == nonces[payload.to] + 1, "Invalid nonce");
 
         // // Tạo message hash từ dữ liệu nhập, kiểm tra trùng với messageHash
         // MessageData memory data = MessageData(
@@ -273,8 +266,8 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         //     tokenAddr,
         //     nonce
         // );
-        bytes32 calcHash = hashMessage(payload);
-        require(calcHash == payload.txKey, "Invalid message hash");
+        // bytes32 calcHash = hashMessage(payload);
+        // require(calcHash == payload.txKey, "Invalid message hash");
 
         // Xác thực chữ ký theo chuẩn eth-signed-message
         require(
@@ -300,26 +293,29 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
             Payload memory stored = payloadData[payload.txKey];
             require(
                 stored.txKey == payload.txKey &&
-                stored.from == payload.from &&
-                stored.to == payload.to &&
-                stored.tokenAddr == payload.tokenAddr &&
-                stored.amount == payload.amount &&
-                stored.nonce == payload.nonce,
+                    stored.from == payload.from &&
+                    stored.to == payload.to &&
+                    stored.tokenAddr == payload.tokenAddr &&
+                    stored.amount == payload.amount,
+                // stored.nonce == payload.nonce,
                 "Data mismatch"
             );
-
         }
 
         // Đánh dấu validator đã ký, tăng số chữ ký
-        signatures[payload.txKey][msg.sender] = true;
-        signatureCount[payload.txKey] += 1;
+        // signatures[payload.txKey][msg.sender] = true;
+        // signatureCount[payload.txKey] += 1;
+        if (!signatures[payload.txKey][msg.sender]) {
+            signatures[payload.txKey][msg.sender] = true;
+            signatureCount[payload.txKey] += 1;
+        }
 
         emit SignatureSubmitted(payload.txKey, msg.sender);
 
         // Nếu đủ threshold → thực thi hành động
         if (signatureCount[payload.txKey] >= threshold) {
             // Cập nhật nonce cho user
-            nonces[payload.to] = payload.nonce;
+            // nonces[payload.to] = payload.nonce;
             _execute(payload.txKey);
         }
     }
@@ -331,7 +327,7 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         require(data.to != address(0), "Invalid recipient address");
 
         address recipientAddr = data.to;
-    
+
         processedMessages[txKey] = true;
 
         if (data.tokenType == 0) {
@@ -349,7 +345,11 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
                 "Insufficient ERC20 balance"
             );
             IERC20(data.tokenAddr).safeTransfer(recipientAddr, data.amount);
-            emit UnlockedTokenERC20VL(recipientAddr, data.tokenAddr, data.amount);
+            emit UnlockedTokenERC20VL(
+                recipientAddr,
+                data.tokenAddr,
+                data.amount
+            );
         } else {
             revert("Unsupported token type");
         }
@@ -364,13 +364,44 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         emit Executed(txKey);
     }
 
+    function recoverSigner(
+        bytes32 message,
+        bytes memory signature
+    ) internal pure returns (address) {
+        require(signature.length == 65, "Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+
+        // v must be 27 or 28
+        if (v < 27) {
+            v += 27;
+        }
+
+        require(v == 27 || v == 28, "Invalid v value");
+
+        // Add Ethereum signed message prefix
+        bytes32 ethSignedMessageHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", message)
+        );
+
+        return ecrecover(ethSignedMessageHash, v, r, s);
+    }
+
     function _verifySignature(
         bytes32 txKey,
         bytes memory signature,
         address signer
     ) internal pure returns (bool) {
         // bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(messageHash);
-        return ECDSA.recover(txKey, signature) == signer;
+        return recoverSigner(txKey, signature) == signer;
     }
 
     function _splitSignature(
@@ -390,6 +421,10 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         }
         return false;
     }
+
+    // function getNonce(address user) public view returns (uint256) {
+    //     return nonces[user];
+    // }
 
     function setTokenAddressToId(
         address tokenAddress,
@@ -415,7 +450,6 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     ) external payable whenNotPaused nonReentrant {
         // require(amountToBridge > 0, "Amount must be > 0");
         // require(destAddress.length > 0, "Destination address cannot be empty");
-        require(address(oftToken) != address(0), "Invalid OFT token");
 
         uint16 lzDestChainId = uint16(destChainId);
         require(lzDestChainId == destChainId, "destChainId overflow");
@@ -450,16 +484,44 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     }
 
     function lockTokenVL(
+        address tokenAddr,
+        uint256 amount,
         address destAddress,
         address destWalletAddress
     ) external payable whenNotPaused nonReentrant {
+        if (tokenAddr == address(0)) {
+            // Lock native coin
+            require(msg.value == amount, "Amount mismatch");
+            if (amount == 0) {
+                revert AmountZero();
+            }
 
-        if (msg.value == 0) {
-            revert AmountZero();
+            lockedTokenVL[msg.sender] += amount;
+
+            emit LockedTokenVL(
+                msg.sender,
+                amount,
+                destAddress,
+                destWalletAddress,
+                tokenAddr
+            );
+        } else {
+            // Lock ERC20
+            if (amount == 0) {
+                revert AmountZero();
+            }
+
+            IERC20(tokenAddr).transferFrom(msg.sender, address(this), amount);
+            lockedTokenVL[msg.sender] += amount;
+
+            emit LockedTokenVL(
+                msg.sender,
+                amount,
+                destAddress,
+                destWalletAddress,
+                tokenAddr
+            );
         }
-
-        lockedTokenVL[msg.sender] += msg.value;
-        emit LockedTokenVL(msg.sender, msg.value, destAddress,destWalletAddress, "ETH");
     }
 
     function lockTokenCCIP(
