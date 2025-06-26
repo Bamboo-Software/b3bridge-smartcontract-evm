@@ -40,9 +40,11 @@ const config = {
   },
   etherscan: {
     apiKey: {
-      sepolia: process.env.ETHERSCAN_API_KEY_SEPOLIA,
-      bsc: process.env.ETHERSCAN_API_KEY_BSC,
-      sei: process.env.ETHERSCAN_API_KEY_SEI,
+      //sepolia: process.env.ETHERSCAN_API_KEY_SEPOLIA,
+      // bsc: process.env.ETHERSCAN_API_KEY_BSC,
+      // sei: process.env.ETHERSCAN_API_KEY_SEI,
+      // ethereum: process.env.ETHERSCAN_API_KEY
+      mainnet:process.env.ETHERSCAN_API_KEY
     },
     customChains: [
       {

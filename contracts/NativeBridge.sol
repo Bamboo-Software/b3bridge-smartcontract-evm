@@ -110,6 +110,10 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
         address indexed destAddress,
         address desWalletAddress
     );
+    event CompareFee(
+        uint256 sent,
+        uint256 fee
+    );
 
     // struct MessageData {
     //     bytes user;
@@ -594,6 +598,8 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
             );
         }
         emit MessageSent(messageId);
+        emit CompareFee(msg.value, fee);
+
 
         emit LockedTokenCCIP(
             msg.sender,
@@ -614,31 +620,46 @@ contract NativeBridge is CCIPReceiver, Ownable, Pausable, ReentrancyGuard {
     }
 
     function getFeeCCIP(
+        IERC20 token,
         uint64 destChainSelector,
-        address receiver,
-        bytes memory data,
-        PayFeesIn payFeesIn,
-        address tokenAddress,
-        uint256 tokenAmount
+        address destAddress,
+        address desWalletAddress,
+        uint256 amountToBridge,
+        PayFeesIn payFeesIn
     ) external view returns (uint256) {
-        Client.EVMTokenAmount[]
-            memory tokenAmounts = new Client.EVMTokenAmount[](1);
-        tokenAmounts[0] = Client.EVMTokenAmount({
-            token: tokenAddress,
-            amount: tokenAmount
-        });
+       if (destChainSelector == 0) {
+            revert InvalidDestChainSelector();
+        }
+        if (destAddress == address(0)) {
+            revert DestAddressZero();
+        }
+        if (desWalletAddress == address(0)) {
+            revert DesWalletAddressZero();
+        }
+        if (amountToBridge == 0) {
+            revert AmountToBridgeZero();
+        }
+        require(amountToBridge > 0, "Amount must be > 0");
 
-        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
-            receiver: abi.encode(receiver),
-            data: data,
-            tokenAmounts: tokenAmounts,
-            feeToken: payFeesIn == PayFeesIn.LINK ? i_link : address(0),
+        // Look up tokenId
+        bytes32 tokenId = tokenAddressToId[address(token)];
+        require(tokenId != bytes32(0), "Unsupported token");
+      
+        // Build message
+        Client.EVM2AnyMessage memory evmMessage = Client.EVM2AnyMessage({
+            receiver: abi.encode(destAddress),
+            data: abi.encode(desWalletAddress, tokenId, amountToBridge),
+            tokenAmounts: new Client.EVMTokenAmount[](0),
             extraArgs: Client._argsToBytes(
-                Client.EVMExtraArgsV1({gasLimit: 300_000})
-            )
+                Client.GenericExtraArgsV2({
+                    gasLimit: 300_000,
+                    allowOutOfOrderExecution: true
+                })
+            ),
+            feeToken: payFeesIn == PayFeesIn.LINK ? i_link : address(0)
         });
 
-        return IRouterClient(getRouter()).getFee(destChainSelector, message);
+        return IRouterClient(getRouter()).getFee(destChainSelector, evmMessage);
     }
 
     function _ccipReceive(

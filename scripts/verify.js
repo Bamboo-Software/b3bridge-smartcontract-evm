@@ -3,10 +3,10 @@ const { run } = require("hardhat");
 
 async function main() {
 
-  const address = "0x44E44963dd3933D70453F457D772A81Eb2F55fcf";
+  const address = "0x282884fB2d9365652178656EF6955dFAB1481F5f";
 
-  const ccipRouterAddress = "0x0BF3dE8c5D3e8A2B34D2BEeB17ABfCeBaf363A59";
-  const link = "0x779877A7B0D9E8603169DdbD7836e478b4624789"
+  const ccipRouterAddress = "0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D";
+  const link = "0x514910771AF9Ca656af840dff83E8264EcF986CA";
   const validators = ["0xBdA83db19c92F5CD38095a241A3636ea58Ee4b45"];
   const threshold = 1;
 
